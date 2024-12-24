@@ -514,8 +514,11 @@ static void* pinedio_pin_poll_thread(void* arg) {
   uint32_t input;
   while (!should_exit) {
     ret = pinedio_get_input(inst, &input);
-    pinedio_mutex_lock(&inst->usb_access_mutex);
     if (ret != 0) continue;
+
+    struct { void (*cb)(void); } to_call[PINEDIO_INT_PIN_MAX];
+    uint8_t call_count = 0;
+    pinedio_mutex_lock(&inst->usb_access_mutex);
     for (uint8_t int_pin = 0; int_pin < PINEDIO_INT_PIN_MAX; int_pin++) {
       struct pinedio_inst_int* inst_int = &inst->interrupts[int_pin];
       if (inst_int->callback == NULL) continue;
@@ -524,9 +527,7 @@ static void* pinedio_pin_poll_thread(void* arg) {
         enum pinedio_int_mode mode =
                 inst_int->previous_state == false && state == true ? PINEDIO_INT_MODE_RISING : PINEDIO_INT_MODE_FALLING;
         if (inst_int->mode & mode) {
-          pinedio_mutex_unlock(&inst->usb_access_mutex);
-          inst_int->callback();
-          pinedio_mutex_lock(&inst->usb_access_mutex);
+          to_call[call_count++].cb = inst_int->callback;
         }
       }
       inst_int->previous_state = state;
@@ -534,6 +535,10 @@ static void* pinedio_pin_poll_thread(void* arg) {
 
     should_exit = inst->pin_poll_thread_exit;
     pinedio_mutex_unlock(&inst->usb_access_mutex);
+
+    for (uint8_t i = 0; i < call_count; i++) {
+      to_call[i].cb();
+    }
     platform_sleep(1000 / 30);
   }
 }
